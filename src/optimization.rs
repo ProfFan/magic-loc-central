@@ -57,23 +57,20 @@ fn least_squares_solution(points: &[Vector3<f64>], distances: &[f64]) -> Option<
 ///
 /// The function returns the estimated point and the error
 pub fn localize_point(distances: &[f64]) -> Option<Vector3<f64>> {
-    let mut points = configuration::COORDINATES
-        .map(|(x, y, z)| Vector3::new(x, y, z))
-        .to_vec();
+    let mut points = Vec::new();
+    let mut distances_valid = Vec::<f64>::new();
 
-    // Remove anchor where range is infinite
-    let mut distances = distances.to_vec();
-    let mut i = 0;
-    while i < distances.len() {
-        if distances[i] > 1e6 {
-            distances.remove(i);
-            points.remove(i);
-        } else {
-            i += 1;
+    for (i, &distance) in distances.iter().enumerate() {
+        if !distance.is_normal() {
+            continue;
         }
+
+        let point = configuration::COORDINATES[i];
+        points.push(Vector3::new(point.0, point.1, point.2));
+        distances_valid.push(distance);
     }
 
-    return least_squares_solution(&points, &distances);
+    return least_squares_solution(&points, &distances_valid);
 }
 
 #[cfg(test)]
