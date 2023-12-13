@@ -21,6 +21,8 @@ mod command_line;
 mod proto;
 // Async stream decoder for the custom wire format.
 mod stream_decoder;
+// Optimization for the location of the device
+mod optimization;
 
 /// Synchronize the incoming packets according to the sequence number
 /// and publish the synchronized packets to the ZMQ publisher
