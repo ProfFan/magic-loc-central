@@ -3,18 +3,18 @@ use std::{
     collections::{HashMap, VecDeque},
 };
 
-use binrw::BinRead;
+use binrw::{BinRead, BinWrite};
 use futures::{
     future::{join, ready},
     stream::FuturesUnordered,
-    StreamExt,
+    SinkExt, StreamExt,
 };
 use stream_decoder::MagicLocStreamDecoder;
 use tmq::{self, publish, Context};
 use tokio;
 use tokio_serial::{self, SerialPort, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::Decoder;
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 use rzcobs;
 
@@ -26,6 +26,8 @@ mod proto;
 mod stream_decoder;
 // Optimization for the location of the device
 mod optimization;
+
+mod configuration;
 
 /// Synchronize the incoming packets according to the sequence number
 ///
@@ -130,9 +132,33 @@ pub async fn sync_and_publish(
             serial_fifos[id].push_back(decoded);
 
             // Synchronize the packets
-            if let Some(packets) = synchronize(&mut serial_fifos) {
+            if let Some(mut packets) = synchronize(&mut serial_fifos) {
                 // print the synchronized packets
-                info!("Synchronized packets: {:?}", packets);
+                debug!("Synchronized packets: {:?}", packets);
+
+                for packet in packets.iter_mut() {
+                    packet.ranges.iter_mut().for_each(|x| *x -= 76.8);
+                }
+
+                debug!("Bias subtracted: {:?}", packets);
+
+                // Publish the synchronized packets
+                let buf = Vec::new();
+                let mut writer = binrw::io::Cursor::new(buf);
+                packets.write(&mut writer).unwrap();
+                let result = publisher.send(vec![writer.into_inner()]).await;
+                if result.is_err() {
+                    error!("Error publishing to ZMQ: {:?}", result);
+                }
+
+                // Localize
+                for packet in packets.iter_mut() {
+                    let distances = packet.ranges;
+                    let point = optimization::localize_point(&distances);
+                    if let Some(point) = point {
+                        info!("Estimate {}: {:0.3}", packet.tag_addr, point.transpose());
+                    }
+                }
             }
         } else {
             debug!("Decoding error: {:?}", decoded);
@@ -153,7 +179,7 @@ pub async fn main() {
     info!("Starting with options: {:?}", opts);
 
     // Open zmq publisher
-    let mut publisher = tmq::publish(&Context::new()).bind(&opts.zmq_addr).unwrap();
+    let publisher = tmq::publish(&Context::new()).bind(&opts.zmq_addr).unwrap();
 
     // Open the supplied serial ports
     let mut serial_ports = Vec::new();

@@ -1,6 +1,8 @@
 use nalgebra::{DMatrix, Vector3};
 use tracing::debug;
 
+use crate::configuration;
+
 fn least_squares_solution(points: &[Vector3<f64>], distances: &[f64]) -> Option<Vector3<f64>> {
     if points.len() != distances.len() || points.is_empty() {
         return None;
@@ -49,6 +51,29 @@ fn least_squares_solution(points: &[Vector3<f64>], distances: &[f64]) -> Option<
     }
 
     Some(guess) // Return the best guess
+}
+
+/// Try localize a point with the given distances to the anchors
+///
+/// The function returns the estimated point and the error
+pub fn localize_point(distances: &[f64]) -> Option<Vector3<f64>> {
+    let mut points = configuration::COORDINATES
+        .map(|(x, y, z)| Vector3::new(x, y, z))
+        .to_vec();
+
+    // Remove anchor where range is infinite
+    let mut distances = distances.to_vec();
+    let mut i = 0;
+    while i < distances.len() {
+        if distances[i] > 1e6 {
+            distances.remove(i);
+            points.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+
+    return least_squares_solution(&points, &distances);
 }
 
 #[cfg(test)]
