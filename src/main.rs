@@ -1,4 +1,7 @@
-use std::{cell::RefCell, collections::VecDeque};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+};
 
 use binrw::BinRead;
 use futures::{
@@ -25,13 +28,67 @@ mod stream_decoder;
 mod optimization;
 
 /// Synchronize the incoming packets according to the sequence number
+///
+/// This function is called when a new packet arrives from a serial port.
+pub fn synchronize(
+    serial_fifos: &mut Vec<VecDeque<proto::RangeReport>>,
+) -> Option<Vec<proto::RangeReport>> {
+    // Check if all the FIFO queues are non-empty
+    for fifo in serial_fifos.iter() {
+        if fifo.is_empty() {
+            return None;
+        }
+    }
+
+    let mut txts_count = HashMap::<u64, usize>::new();
+    for fifo in serial_fifos.iter() {
+        for report in fifo.iter() {
+            let count = txts_count.entry(report.trigger_txts).or_insert(0);
+            *count += 1;
+        }
+    }
+
+    // If any of the TXTS is present in all the FIFO queues, then we have a match
+    // We drop all the previous packets and return the matched packets
+    let txts_match = txts_count
+        .iter()
+        .find(|(_, &count)| count == serial_fifos.len());
+
+    if txts_match.is_none() {
+        return None;
+    }
+
+    let txts_match = txts_match.unwrap().0;
+
+    // drop all the previous packets until the TXTS match
+    for fifo in serial_fifos.iter_mut() {
+        while let Some(front) = fifo.front() {
+            if front.trigger_txts == *txts_match {
+                break;
+            }
+
+            fifo.pop_front();
+        }
+    }
+
+    // Now all the FIFO queues have the same TXTS at the front
+    // We can return the packets
+    let mut packets = Vec::new();
+    for fifo in serial_fifos.iter_mut() {
+        packets.push(fifo.pop_front().unwrap());
+    }
+
+    Some(packets)
+}
+
+/// Synchronize the incoming packets according to the sequence number
 /// and publish the synchronized packets to the ZMQ publisher
 pub async fn sync_and_publish(
     mut publisher: tmq::publish::Publish,
     serial_ports: Vec<SerialStream>,
 ) {
     // Create FIFO queue for all the serial ports
-    let mut serial_fifos = Vec::new();
+    let mut serial_fifos: Vec<VecDeque<proto::RangeReport>> = Vec::new();
     let mut readers = Vec::new();
     for serial_port in serial_ports {
         serial_fifos.push(VecDeque::<proto::RangeReport>::new());
@@ -68,6 +125,15 @@ pub async fn sync_and_publish(
 
             // print the decoded packet
             debug!("Decoded packet from {}: {:?}", id, decoded);
+
+            // Add the packet to the FIFO queue
+            serial_fifos[id].push_back(decoded);
+
+            // Synchronize the packets
+            if let Some(packets) = synchronize(&mut serial_fifos) {
+                // print the synchronized packets
+                info!("Synchronized packets: {:?}", packets);
+            }
         } else {
             debug!("Decoding error: {:?}", decoded);
         }

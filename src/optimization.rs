@@ -48,7 +48,7 @@ fn least_squares_solution(points: &[Vector3<f64>], distances: &[f64]) -> Option<
         }
     }
 
-    None
+    Some(guess) // Return the best guess
 }
 
 #[cfg(test)]
