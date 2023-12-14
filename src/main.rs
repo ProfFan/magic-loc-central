@@ -9,6 +9,7 @@ use futures::{
     stream::FuturesUnordered,
     SinkExt, StreamExt,
 };
+use nalgebra::Vector3;
 use stream_decoder::MagicLocStreamDecoder;
 use tmq::{self, publish, Context};
 use tokio;
@@ -132,7 +133,7 @@ pub async fn sync_and_publish(
             serial_fifos[id].push_back(decoded);
 
             // Synchronize the packets
-            if let Some(mut packets) = synchronize(&mut serial_fifos) {
+            while let Some(mut packets) = synchronize(&mut serial_fifos) {
                 // print the synchronized packets
                 debug!("Synchronized packets: {:?}", packets);
 
@@ -146,19 +147,32 @@ pub async fn sync_and_publish(
                 let buf = Vec::new();
                 let mut writer = binrw::io::Cursor::new(buf);
                 packets.write(&mut writer).unwrap();
-                let result = publisher.send(vec![writer.into_inner()]).await;
+                let result = publisher
+                    .send(vec![b"ranges".to_vec(), writer.into_inner()])
+                    .await;
                 if result.is_err() {
                     error!("Error publishing to ZMQ: {:?}", result);
                 }
 
                 // Localize
+                let mut locations = Vec::new();
                 for packet in packets.iter_mut() {
                     let distances = packet.ranges;
                     let point = optimization::localize_point(&distances);
-                    if let Some(point) = point {
-                        info!("Estimate {}: {:0.3}", packet.tag_addr, point.transpose());
-                    }
+
+                    // Convert to [f64; 3]
+                    let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
+                    let point = [point[0] as f64, point[1] as f64, point[2] as f64];
+                    locations.push(point);
                 }
+
+                // send the locations to the publisher as JSON
+                let json = serde_json::to_string(&locations).unwrap();
+                let _ = publisher
+                    .send(vec![b"points".to_vec(), json.into_bytes()])
+                    .await;
+
+                info!("Locations: {:0.2?}", locations);
             }
         } else {
             debug!("Decoding error: {:?}", decoded);
