@@ -30,6 +30,12 @@ mod optimization;
 
 mod configuration;
 
+#[derive(Debug, Clone, Copy)]
+pub struct LocalizedPoint {
+    pub id: usize,
+    pub point: [f64; 3],
+}
+
 /// Synchronize the incoming packets according to the sequence number
 ///
 /// This function is called when a new packet arrives from a serial port.
@@ -71,6 +77,13 @@ pub fn synchronize(
             }
 
             fifo.pop_front();
+        }
+    }
+
+    // Check if all the FIFO queues are non-empty
+    for fifo in serial_fifos.iter() {
+        if fifo.is_empty() {
+            return None;
         }
     }
 
@@ -138,7 +151,7 @@ pub async fn sync_and_publish(
                 debug!("Synchronized packets: {:?}", packets);
 
                 for packet in packets.iter_mut() {
-                    packet.ranges.iter_mut().for_each(|x| *x -= 76.8);
+                    packet.ranges.iter_mut().for_each(|x| *x -= 76.80);
                 }
 
                 debug!("Bias subtracted: {:?}", packets);
@@ -163,7 +176,10 @@ pub async fn sync_and_publish(
                     // Convert to [f64; 3]
                     let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
                     let point = [point[0] as f64, point[1] as f64, point[2] as f64];
-                    locations.push(point);
+                    locations.push((packet.tag_addr, point));
+
+                    // info
+                    info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
                 }
 
                 // send the locations to the publisher as JSON
@@ -172,7 +188,7 @@ pub async fn sync_and_publish(
                     .send(vec![b"points".to_vec(), json.into_bytes()])
                     .await;
 
-                info!("Locations: {:0.2?}", locations);
+                debug!("Locations: {:0.2?}", locations);
             }
         } else {
             debug!("Decoding error: {:?}", decoded);
@@ -193,7 +209,10 @@ pub async fn main() {
     info!("Starting with options: {:?}", opts);
 
     // Open zmq publisher
-    let publisher = tmq::publish(&Context::new()).bind(&opts.zmq_addr).unwrap();
+    let publisher = tmq::publish(&Context::new())
+        .set_sndhwm(4)
+        .bind(&opts.zmq_addr)
+        .unwrap();
 
     // Open the supplied serial ports
     let mut serial_ports = Vec::new();

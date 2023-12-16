@@ -1,5 +1,5 @@
 use nalgebra::{DMatrix, Vector3};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::configuration;
 
@@ -49,6 +49,17 @@ fn least_squares_solution(points: &[Vector3<f64>], distances: &[f64]) -> Option<
             return Some(guess);
         }
     }
+
+    // Calculate residuals for each anchor
+    let mut residuals = Vec::new();
+    for (i, (&point, &distance)) in points.iter().zip(distances).enumerate() {
+        let diff = point - guess;
+        let dist = diff.norm();
+        residuals.push((i, dist - distance));
+    }
+
+    // Print the residuals
+    info!("Residuals: {:+0.3?}", residuals);
 
     Some(guess) // Return the best guess
 }
