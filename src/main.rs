@@ -157,11 +157,9 @@ pub async fn sync_and_publish(
                 debug!("Bias subtracted: {:?}", packets);
 
                 // Publish the synchronized packets
-                let buf = Vec::new();
-                let mut writer = binrw::io::Cursor::new(buf);
-                packets.write(&mut writer).unwrap();
+                let json = serde_json::to_string(&packets).unwrap();
                 let result = publisher
-                    .send(vec![b"ranges".to_vec(), writer.into_inner()])
+                    .send(vec![b"ranges".to_vec(), json.into_bytes()])
                     .await;
                 if result.is_err() {
                     error!("Error publishing to ZMQ: {:?}", result);

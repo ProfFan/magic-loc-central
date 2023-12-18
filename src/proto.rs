@@ -1,8 +1,9 @@
 // Communication with the host computer
 
-use binrw::{io::Cursor, *};
+use binrw::{*};
+use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, PartialEq, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
 #[binrw]
 #[brw(magic = b"RNG", little)]
 pub struct RangeReport {
