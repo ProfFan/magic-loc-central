@@ -1,6 +1,6 @@
 // Communication with the host computer
 
-use binrw::{*};
+use binrw::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]

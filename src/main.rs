@@ -1,9 +1,6 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, VecDeque},
-};
+use std::collections::{HashMap, VecDeque};
 
-use binrw::{BinRead, BinWrite};
+use binrw::BinRead;
 use futures::{
     future::{join, ready},
     stream::FuturesUnordered,
@@ -11,9 +8,9 @@ use futures::{
 };
 use nalgebra::Vector3;
 use stream_decoder::MagicLocStreamDecoder;
-use tmq::{self, publish, Context};
+use tmq::{self, Context};
 use tokio;
-use tokio_serial::{self, SerialPort, SerialPortBuilderExt, SerialStream};
+use tokio_serial::{self, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::Decoder;
 use tracing::{debug, error, info, trace};
 
@@ -135,58 +132,63 @@ pub async fn sync_and_publish(
         let decoded = rzcobs::decode(&packet[4..]);
 
         if let Ok(decoded) = decoded {
-            // Use binrw to decode the packet
-            let decoded =
-                proto::RangeReport::read(&mut binrw::io::Cursor::new(&decoded[..])).unwrap();
+            // Verify that the packet is indeed a RangeReport
+            if &decoded[0..3] != b"RNG".as_slice() {
+                debug!("Packet {:?} is not a RangeReport", decoded);
+            } else {
+                // Use binrw to decode the packet
+                let decoded =
+                    proto::RangeReport::read(&mut binrw::io::Cursor::new(&decoded[..])).unwrap();
 
-            // print the decoded packet
-            debug!("Decoded packet from {}: {:?}", id, decoded);
+                // print the decoded packet
+                debug!("Decoded packet from {}: {:?}", id, decoded);
 
-            // Add the packet to the FIFO queue
-            serial_fifos[id].push_back(decoded);
+                // Add the packet to the FIFO queue
+                serial_fifos[id].push_back(decoded);
 
-            // Synchronize the packets
-            while let Some(mut packets) = synchronize(&mut serial_fifos) {
-                // print the synchronized packets
-                debug!("Synchronized packets: {:?}", packets);
+                // Synchronize the packets
+                while let Some(mut packets) = synchronize(&mut serial_fifos) {
+                    // print the synchronized packets
+                    debug!("Synchronized packets: {:?}", packets);
 
-                for packet in packets.iter_mut() {
-                    packet.ranges.iter_mut().for_each(|x| *x -= 76.80);
+                    for packet in packets.iter_mut() {
+                        packet.ranges.iter_mut().for_each(|x| *x -= 76.80);
+                    }
+
+                    debug!("Bias subtracted: {:?}", packets);
+
+                    // Publish the synchronized packets
+                    let json = serde_json::to_string(&packets).unwrap();
+                    let result = publisher
+                        .send(vec![b"ranges".to_vec(), json.into_bytes()])
+                        .await;
+                    if result.is_err() {
+                        error!("Error publishing to ZMQ: {:?}", result);
+                    }
+
+                    // Localize
+                    let mut locations = Vec::new();
+                    for packet in packets.iter_mut() {
+                        let distances = packet.ranges;
+                        let point = optimization::localize_point(&distances);
+
+                        // Convert to [f64; 3]
+                        let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
+                        let point = [point[0] as f64, point[1] as f64, point[2] as f64];
+                        locations.push((packet.tag_addr, point));
+
+                        // info
+                        info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
+                    }
+
+                    // send the locations to the publisher as JSON
+                    let json = serde_json::to_string(&locations).unwrap();
+                    let _ = publisher
+                        .send(vec![b"points".to_vec(), json.into_bytes()])
+                        .await;
+
+                    debug!("Locations: {:0.2?}", locations);
                 }
-
-                debug!("Bias subtracted: {:?}", packets);
-
-                // Publish the synchronized packets
-                let json = serde_json::to_string(&packets).unwrap();
-                let result = publisher
-                    .send(vec![b"ranges".to_vec(), json.into_bytes()])
-                    .await;
-                if result.is_err() {
-                    error!("Error publishing to ZMQ: {:?}", result);
-                }
-
-                // Localize
-                let mut locations = Vec::new();
-                for packet in packets.iter_mut() {
-                    let distances = packet.ranges;
-                    let point = optimization::localize_point(&distances);
-
-                    // Convert to [f64; 3]
-                    let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
-                    let point = [point[0] as f64, point[1] as f64, point[2] as f64];
-                    locations.push((packet.tag_addr, point));
-
-                    // info
-                    info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
-                }
-
-                // send the locations to the publisher as JSON
-                let json = serde_json::to_string(&locations).unwrap();
-                let _ = publisher
-                    .send(vec![b"points".to_vec(), json.into_bytes()])
-                    .await;
-
-                debug!("Locations: {:0.2?}", locations);
             }
         } else {
             debug!("Decoding error: {:?}", decoded);
