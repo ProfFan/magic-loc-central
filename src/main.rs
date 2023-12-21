@@ -133,9 +133,7 @@ pub async fn sync_and_publish(
 
         if let Ok(decoded) = decoded {
             // Verify that the packet is indeed a RangeReport
-            if &decoded[0..3] != b"RNG".as_slice() {
-                debug!("Packet {:?} is not a RangeReport", decoded);
-            } else {
+            if &decoded[0..3] == b"RNG".as_slice() {
                 // Use binrw to decode the packet
                 let decoded =
                     proto::RangeReport::read(&mut binrw::io::Cursor::new(&decoded[..])).unwrap();
@@ -189,6 +187,22 @@ pub async fn sync_and_publish(
 
                     debug!("Locations: {:0.2?}", locations);
                 }
+            }
+
+            if &decoded[0..3] == b"IMU".as_slice() {
+                // Use binrw to decode the packet
+                let decoded =
+                    proto::ImuReport::read(&mut binrw::io::Cursor::new(&decoded[..])).unwrap();
+
+                // print the decoded packet
+                debug!("Decoded packet from {}: {:?}", id, decoded);
+
+                // Publish the IMU packet, no synchronization needed
+                let json = serde_json::to_string(&decoded).unwrap();
+
+                let _ = publisher
+                    .send(vec![b"imu".to_vec(), json.into_bytes()])
+                    .await;
             }
         } else {
             debug!("Decoding error: {:?}", decoded);
