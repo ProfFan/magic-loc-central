@@ -12,7 +12,7 @@ fn least_squares_solution(points: &[Vector3<f64>], distances: &[f64]) -> Option<
     let mut guess = Vector3::new(0.0, 0.0, 0.0);
 
     // Define the maximum number of iterations and a tolerance for convergence
-    let max_iterations = 45;
+    let max_iterations = 5;
     let tolerance = 1e-3;
 
     for _ in 0..max_iterations {

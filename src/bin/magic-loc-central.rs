@@ -1,4 +1,9 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, VecDeque},
+    os::fd::{AsRawFd, BorrowedFd},
+    time::Duration,
+};
 
 use binrw::BinRead;
 use futures::{
@@ -7,25 +12,21 @@ use futures::{
     SinkExt, StreamExt,
 };
 use nalgebra::Vector3;
+
+use magic_loc_central::*;
+
 use stream_decoder::MagicLocStreamDecoder;
 use tmq::{self, Context};
 use tokio;
-use tokio_serial::{self, SerialPortBuilderExt, SerialStream};
+use tokio_serial::{self, SerialPort, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::Decoder;
 use tracing::{debug, error, info, trace};
 
 use rzcobs;
 
-// Command line parser
-mod command_line;
-// Protocol definitions
-mod proto;
-// Async stream decoder for the custom wire format.
-mod stream_decoder;
-// Optimization for the location of the device
-mod optimization;
+use serialport_low_latency;
 
-mod configuration;
+use crate::proto::ImuReport;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalizedPoint {
@@ -91,6 +92,10 @@ pub fn synchronize(
         packets.push(fifo.pop_front().unwrap());
     }
 
+    // Print the statistics for FIFO queues
+    let serial_fifos_depths: Vec<usize> = serial_fifos.iter().map(|x| x.len()).collect();
+    trace!("FIFO queue depths: {:?}", serial_fifos_depths);
+
     Some(packets)
 }
 
@@ -113,6 +118,8 @@ pub async fn sync_and_publish(
     for (id, reader) in readers.iter_mut().enumerate() {
         packet_futures.push(join(ready(id), reader.into_future()));
     }
+
+    let mut last_imu_ts = Option::<u64>::None;
 
     loop {
         // Wait for the next packet to arrive (from any serial port)
@@ -197,6 +204,18 @@ pub async fn sync_and_publish(
                 // print the decoded packet
                 debug!("Decoded packet from {}: {:?}", id, decoded);
 
+                // Check the interval between the IMU packets
+                if let Some(last_imu_ts) = last_imu_ts {
+                    let interval = decoded.system_ts - last_imu_ts;
+                    tracing::debug!("IMU interval: {} ms", interval);
+
+                    if interval > 1500 {
+                        tracing::error!("IMU interval too large: {} ms", interval);
+                    }
+                }
+
+                last_imu_ts = Some(decoded.system_ts);
+
                 // Publish the IMU packet, no synchronization needed
                 let json = serde_json::to_string(&decoded).unwrap();
 
@@ -231,8 +250,22 @@ pub async fn main() {
     // Open the supplied serial ports
     let mut serial_ports = Vec::new();
     for port in opts.serial_ports {
-        let serial_port = tokio_serial::new(port, 921600).open_native_async();
-        serial_ports.push(serial_port.unwrap());
+        let serial_port = tokio_serial::new(port.to_owned(), 921600).open_native();
+        let mut serial_port = serial_port.unwrap();
+
+        // Set the serial port to low latency mode
+        serialport_low_latency::enable_low_latency(&mut serial_port).unwrap();
+
+        drop(serial_port);
+
+        let serial_port = tokio_serial::new(port, 921600)
+            .timeout(Duration::from_millis(10))
+            .open_native_async()
+            .unwrap();
+
+        serial_port.clear(tokio_serial::ClearBuffer::Input).unwrap();
+
+        serial_ports.push(serial_port);
     }
 
     // synchronize and publish the packets
