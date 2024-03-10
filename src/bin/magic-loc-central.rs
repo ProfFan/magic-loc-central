@@ -17,7 +17,6 @@ use magic_loc_central::*;
 
 use stream_decoder::MagicLocStreamDecoder;
 use tmq::{self, Context};
-use tokio;
 use tokio_serial::{self, SerialPort, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::Decoder;
 use tracing::{debug, error, info, trace};
@@ -172,29 +171,27 @@ pub async fn sync_and_publish(
                     }
 
                     // Localize
-                    if (true) {
-                        let mut locations = Vec::new();
-                        for packet in packets.iter_mut() {
-                            let distances = packet.ranges;
-                            let point = optimization::localize_point(&distances);
+                    let mut locations = Vec::new();
+                    for packet in packets.iter_mut() {
+                        let distances = packet.ranges;
+                        let point = optimization::localize_point(&distances);
 
-                            // Convert to [f64; 3]
-                            let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
-                            let point = [point[0] as f64, point[1] as f64, point[2] as f64];
-                            locations.push((packet.tag_addr, point));
+                        // Convert to [f64; 3]
+                        let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
+                        let point = [point[0] as f64, point[1] as f64, point[2] as f64];
+                        locations.push((packet.tag_addr, point));
 
-                            // info
-                            info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
-                        }
-
-                        // send the locations to the publisher as JSON
-                        let json = serde_json::to_string(&locations).unwrap();
-                        let _ = publisher
-                            .send(vec![b"points".to_vec(), json.into_bytes()])
-                            .await;
-
-                        debug!("Locations: {:0.2?}", locations);
+                        // info
+                        info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
                     }
+
+                    // send the locations to the publisher as JSON
+                    let json = serde_json::to_string(&locations).unwrap();
+                    let _ = publisher
+                        .send(vec![b"points".to_vec(), json.into_bytes()])
+                        .await;
+
+                    debug!("Locations: {:0.2?}", locations);
                 }
             }
 
@@ -271,5 +268,7 @@ pub async fn main() {
     }
 
     // synchronize and publish the packets
-    tokio::spawn(sync_and_publish(publisher, serial_ports)).await;
+    tokio::spawn(sync_and_publish(publisher, serial_ports))
+        .await
+        .unwrap();
 }
