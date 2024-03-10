@@ -21,12 +21,6 @@ use tokio_serial::{self, SerialPort, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::Decoder;
 use tracing::{debug, error, info, trace};
 
-use rzcobs;
-
-use serialport_low_latency;
-
-use crate::proto::ImuReport;
-
 #[derive(Debug, Clone, Copy)]
 pub struct LocalizedPoint {
     pub id: usize,
