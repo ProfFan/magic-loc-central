@@ -154,7 +154,7 @@ pub async fn sync_and_publish(
                 // Synchronize the packets
                 while let Some(mut packets) = synchronize(&mut serial_fifos) {
                     // print the synchronized packets
-                    debug!("Synchronized packets: {:?}", packets);
+                    info!("Synchronized packets: {:?}", packets);
 
                     for packet in packets.iter_mut() {
                         packet.ranges.iter_mut().for_each(|x| *x -= 76.80);
@@ -172,27 +172,29 @@ pub async fn sync_and_publish(
                     }
 
                     // Localize
-                    let mut locations = Vec::new();
-                    for packet in packets.iter_mut() {
-                        let distances = packet.ranges;
-                        let point = optimization::localize_point(&distances);
+                    if (true) {
+                        let mut locations = Vec::new();
+                        for packet in packets.iter_mut() {
+                            let distances = packet.ranges;
+                            let point = optimization::localize_point(&distances);
 
-                        // Convert to [f64; 3]
-                        let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
-                        let point = [point[0] as f64, point[1] as f64, point[2] as f64];
-                        locations.push((packet.tag_addr, point));
+                            // Convert to [f64; 3]
+                            let point = point.unwrap_or_else(|| Vector3::new(0.0, 0.0, 0.0));
+                            let point = [point[0] as f64, point[1] as f64, point[2] as f64];
+                            locations.push((packet.tag_addr, point));
 
-                        // info
-                        info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
+                            // info
+                            info!("Location of tag {:?}: {:?}", packet.tag_addr, point);
+                        }
+
+                        // send the locations to the publisher as JSON
+                        let json = serde_json::to_string(&locations).unwrap();
+                        let _ = publisher
+                            .send(vec![b"points".to_vec(), json.into_bytes()])
+                            .await;
+
+                        debug!("Locations: {:0.2?}", locations);
                     }
-
-                    // send the locations to the publisher as JSON
-                    let json = serde_json::to_string(&locations).unwrap();
-                    let _ = publisher
-                        .send(vec![b"points".to_vec(), json.into_bytes()])
-                        .await;
-
-                    debug!("Locations: {:0.2?}", locations);
                 }
             }
 
@@ -207,10 +209,10 @@ pub async fn sync_and_publish(
                 // Check the interval between the IMU packets
                 if let Some(last_imu_ts) = last_imu_ts {
                     let interval = decoded.system_ts - last_imu_ts;
-                    tracing::debug!("IMU interval: {} ms", interval);
+                    tracing::debug!("IMU interval: {} us", interval);
 
                     if interval > 1500 {
-                        tracing::error!("IMU interval too large: {} ms", interval);
+                        tracing::error!("IMU interval too large: {} us", interval);
                     }
                 }
 
@@ -269,5 +271,5 @@ pub async fn main() {
     }
 
     // synchronize and publish the packets
-    sync_and_publish(publisher, serial_ports).await;
+    tokio::spawn(sync_and_publish(publisher, serial_ports)).await;
 }
